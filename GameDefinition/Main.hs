@@ -47,6 +47,9 @@ main = do
     fstderr <- SIO.openFile (dataDir </> "stderr.txt") SIO.WriteMode
     GHC.IO.Handle.hDuplicateTo fstdout SIO.stdout
     GHC.IO.Handle.hDuplicateTo fstderr SIO.stderr
+  let fillWorkaround =
+        -- Set up void workaround if nothing specific required.
+        void $ tryPutMVar workaroundOnMainThreadMVar $ return ()
 #endif
   -- Fail here, not inside server code, so that savefiles are not removed,
   -- because they are not the source of the failure.
@@ -54,10 +57,11 @@ main = do
   -- Avoid the bound thread that would slow down the communication.
   a <- async $ tieKnot serverOptions
 #ifndef USE_JSFILE
-  -- Run a (possibly void) workaround for architectures that need
-  -- to perform some actions on the main thread (not just any bound thread),
-  -- e.g., newer OS X drawing with SDL2.
-  workaround <- takeMVar archDependentWorkaroundOnMainThreadMVar
+               `Ex.finally` fillWorkaround
+  -- Run a (possibly void) workaround. It's needed for architectures/frontends
+  -- that need to perform some actions on the main thread
+  -- (not just any bound thread), e.g., newer OS X drawing with SDL2.
+  workaround <- takeMVar workaroundOnMainThreadMVar
   workaround
 #endif
   resOrEx <- waitCatch a

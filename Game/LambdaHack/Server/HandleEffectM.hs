@@ -124,6 +124,18 @@ refillHP source target speedDeltaHP = assert (speedDeltaHP /= 0) $ do
         [] -> return ()
         aid : _ -> execUpdAtomic $ UpdLeadFaction (bfid tb) mleader $ Just aid
 
+cutCalm :: MonadServerAtomic m => ActorId -> m ()
+cutCalm target = do
+  tb <- getsState $ getActorBody target
+  ar <- getsState $ getActorAspect target
+  let upperBound = if hpTooLow tb ar
+                   then 2  -- to trigger domination on next attack, etc.
+                   else xM $ IA.aMaxCalm ar
+      deltaCalm = min minusM1 (upperBound - bcalm tb)
+  -- HP loss decreases Calm by at least @minusM1@ to avoid "hears something",
+  -- which is emitted when decreasing Calm by @minusM@.
+  udpateCalm target deltaCalm
+
 -- Here melee damage is applied. This is necessary so that the same
 -- AI benefit calculation may be used for flinging and for applying items.
 meleeEffectAndDestroy :: MonadServerAtomic m
@@ -255,8 +267,8 @@ itemEffectDisco source target iid itemKind c recharged periodic effs = do
   -- Note: @UseId@ suffices for identification, @UseUp@ is not necessary.
   when (ur >= UseId && not (IK.onlyMinorEffects itemKind)) $ do
     kindId <- getsState $ getIidKindIdServer iid
-    seed <- getsServer $ (EM.! iid) . sitemSeedD
-    execUpdAtomic $ UpdDiscover c iid kindId seed
+    discoAspect <- getsState sdiscoAspect
+    execUpdAtomic $ UpdDiscover c iid kindId $ discoAspect EM.! iid
   return ur
 
 -- | The source actor affects the target actor, with a given effect and power.
@@ -437,18 +449,6 @@ effectRefillHP power0 source target = do
        execSfxAtomic $ SfxEffect (bfid sb) target reportedEffect deltaHP
        refillHP source target deltaHP
        return UseUp
-
-cutCalm :: MonadServerAtomic m => ActorId -> m ()
-cutCalm target = do
-  tb <- getsState $ getActorBody target
-  ar <- getsState $ getActorAspect target
-  let upperBound = if hpTooLow tb ar
-                   then 0  -- to trigger domination, etc.
-                   else xM $ IA.aMaxCalm ar
-      deltaCalm = min minusM1 (upperBound - bcalm tb)
-  -- HP loss decreases Calm by at least @minusM1@ to avoid "hears something",
-  -- which is emitted when decreasing Calm by @minusM@.
-  udpateCalm target deltaCalm
 
 -- ** RefillCalm
 
@@ -973,9 +973,9 @@ effectCreateItem jfidRaw mcount target store grp tim = do
   bagBefore <- getsState $ getBodyStoreBag tb store
   let litemFreq = [(grp, 1)]
   -- Power depth of new items unaffected by number of spawned actors.
-  m4 <- rollItem 0 (blid tb) litemFreq
-  let (itemKnownRaw, (itemFullRaw, kitRaw), seed, _) =
-        fromMaybe (error $ "" `showFailure` (blid tb, litemFreq, c)) m4
+  m3 <- rollItem 0 (blid tb) litemFreq
+  let (itemKnownRaw, (itemFullRaw, kitRaw), _) =
+        fromMaybe (error $ "" `showFailure` (blid tb, litemFreq, c)) m3
       -- Avoid too many different item identifiers (one for each faction)
       -- for blasts or common item generating tiles. Temporary organs are
       -- allowed to be duplicated, because they provide really useful info
@@ -1018,7 +1018,7 @@ effectCreateItem jfidRaw mcount target store grp tim = do
       -- No such items or some items, but void delta, so create items.
       -- If it's, e.g., a periodic poison, the new items will stack with any
       -- already existing items.
-      iid <- registerItem (itemFull, kitNew) itemKnown seed c True
+      iid <- registerItem (itemFull, kitNew) itemKnown c True
       -- If created not on the ground, ID it, because it won't be on pickup.
       when (store /= CGround) $
         discoverIfMinorEffects c iid (itemKindId itemFull)
@@ -1177,8 +1177,8 @@ effectIdentify execSfx iidId source target = do
 identifyIid :: MonadServerAtomic m
             => ItemId -> Container -> ContentId ItemKind -> m ()
 identifyIid iid c itemKindId = do
-  seed <- getsServer $ (EM.! iid) . sitemSeedD
-  execUpdAtomic $ UpdDiscover c iid itemKindId seed
+  discoAspect <- getsState sdiscoAspect
+  execUpdAtomic $ UpdDiscover c iid itemKindId $ discoAspect EM.! iid
 
 -- ** Detect
 

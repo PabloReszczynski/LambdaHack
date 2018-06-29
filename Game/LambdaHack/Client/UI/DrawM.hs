@@ -270,12 +270,11 @@ drawFramePath drawnLevelId = do
 
 drawFrameActor :: forall m. MonadClientUI m => LevelId -> m FrameForall
 drawFrameActor drawnLevelId = do
-  SessionUI{sselected} <- getSession
+  SessionUI{sactorUI, sselected, sUIOptions} <- getSession
   Level{lxsize, lactor} <- getLevel drawnLevelId
   side <- getsClient sside
   mleader <- getsClient sleader
   s <- getState
-  sactorUI <- getsSession sactorUI
   let {-# INLINE viewActor #-}
       viewActor _ as = case as of
         aid : _ ->
@@ -292,8 +291,14 @@ drawFrameActor drawnLevelId = do
                                        then Color.HighlightWhite
                                        else Color.HighlightMagenta
                         | otherwise -> Color.HighlightNone
-          in Color.attrCharToW32
-             $ Color.AttrChar Color.Attr{fg=bcolor, bg} symbol
+              fg | bfid /= side || bproj || bhp <= 0 = bcolor
+                 | otherwise =
+                let (hpCheckWarning, calmCheckWarning) =
+                      checkWarnings sUIOptions aid s
+                in if hpCheckWarning || calmCheckWarning
+                   then Color.Red
+                   else bcolor
+         in Color.attrCharToW32 $ Color.AttrChar Color.Attr{..} symbol
         [] -> error $ "lactor not sparse" `showFailure` ()
       mapVAL :: forall a s. (Point -> a -> Color.AttrCharW32) -> [(Point, a)]
              -> FrameST s
@@ -501,29 +506,36 @@ drawArenaStatus COps{cocave}
               $ T.take 29 (lvlN <+> T.justifyLeft 26 ' ' (cname ck))
                 <+> seenStatus
 
+checkWarnings :: UIOptions -> ActorId -> State -> (Bool, Bool)
+checkWarnings UIOptions{uhpWarningPercent} leader s =
+  let b = getActorBody leader s
+      ar = getActorAspect leader s
+      isImpression iid =
+        maybe False (> 0) $ lookup "impressed" $ IK.ifreq $ getIidKind iid s
+      isImpressed = any isImpression $ EM.keys $ borgan b
+      hpCheckWarning = bhp b <= xM (uhpWarningPercent * IA.aMaxHP ar `div` 100)
+      calmCheckWarning =
+        bcalm b <= xM (uhpWarningPercent * IA.aMaxCalm ar `div` 100)
+        && isImpressed
+  in (hpCheckWarning, calmCheckWarning)
+
 drawLeaderStatus :: MonadClientUI m => Int -> m AttrLine
 drawLeaderStatus waitT = do
   let calmHeaderText = "Calm"
       hpHeaderText = "HP"
-  UIOptions{uhpWarningPercent} <- getsSession sUIOptions
+  sUIOptions <- getsSession sUIOptions
   mleader <- getsClient sleader
   case mleader of
     Just leader -> do
+      b <- getsState $ getActorBody leader
       ar <- getsState $ getActorAspect leader
-      s <- getState
+      (hpCheckWarning, calmCheckWarning)
+        <- getsState $ checkWarnings sUIOptions leader
+      bdark <- getsState $ \s -> not (actorInAmbient b s)
       let showTrunc x = let t = show x
                         in if length t > 3
                            then if x > 0 then "***" else "---"
                            else t
-          (bhpM, darkL, bracedL, hpDelta, calmDelta,
-           ahpS, bhpS, acalmS, bcalmS) =
-            let b@Actor{bhp, bcalm} = getActorBody leader s
-            in ( bhp, not (actorInAmbient b s)
-               , braced b, bhpDelta b, bcalmDelta b
-               , showTrunc $ max 0 $ IA.aMaxHP ar
-               , showTrunc (bhp `divUp` oneM)
-               , showTrunc $ max 0 $ IA.aMaxCalm ar
-               , showTrunc (bcalm `divUp` oneM))
           -- This is a valuable feedback for the otherwise hard to observe
           -- 'wait' command.
           slashes = ["/", "|", "\\", "|"]
@@ -535,30 +547,33 @@ drawLeaderStatus waitT = do
             | snd resCurrentTurn > 0 || snd resPreviousTurn > 0
               = addColor Color.BrGreen
             | otherwise = stringToAL  -- only if nothing at all noteworthy
-          checkWarning =
-            if bhpM <= xM (uhpWarningPercent * IA.aMaxHP ar `div` 100)
-            then addColor Color.Red
-            else stringToAL
-          calmAddAttr = checkDelta calmDelta
+          calmAddAttr = checkDelta $ bcalmDelta b
           -- We only show ambient light, because in fact client can't tell
           -- if a tile is lit, because it it's seen it may be due to ambient
           -- or dynamic light or due to infravision.
-          darkPick | darkL   = "."
+          darkPick | bdark = "."
                    | otherwise = ":"
           calmHeader = calmAddAttr $ calmHeaderText <> darkPick
-          calmText = bcalmS <> (if darkL || not bracedL
-                                then slashPick
-                                else "/") <> acalmS
-          bracePick | bracedL   = "}"
+          calmText = showTrunc (bcalm b `divUp` oneM)
+                     <> (if bdark || not (braced b)
+                         then slashPick
+                         else "/")
+                     <> showTrunc (max 0 $ IA.aMaxCalm ar)
+          bracePick | braced b  = "}"
                     | otherwise = ":"
-          hpAddAttr = checkDelta hpDelta
+          hpAddAttr = checkDelta $ bhpDelta b
           hpHeader = hpAddAttr $ hpHeaderText <> bracePick
-          hpText = bhpS <> (if bracedL || not darkL
-                            then slashPick
-                            else "/") <> ahpS
+          hpText = showTrunc (bhp b `divUp` oneM)
+                   <> (if braced b || not bdark
+                       then slashPick
+                       else "/")
+                   <> showTrunc (max 0 $ IA.aMaxHP ar)
           justifyRight n t = replicate (n - length t) ' ' ++ t
-      return $! calmHeader <> stringToAL (justifyRight 7 calmText)
-                <+:> hpHeader <> checkWarning (justifyRight 7 hpText)
+          colorWarning w = if w then addColor Color.Red else stringToAL
+      return $! calmHeader
+                <> colorWarning calmCheckWarning (justifyRight 7 calmText)
+                <+:> hpHeader
+                <> colorWarning hpCheckWarning (justifyRight 7 hpText)
     Nothing -> return $! stringToAL (calmHeaderText ++ ":  --/--")
                          <+:> stringToAL (hpHeaderText <> ":  --/--")
 

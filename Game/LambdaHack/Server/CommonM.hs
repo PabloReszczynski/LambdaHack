@@ -56,8 +56,8 @@ revealItems mfid = do
         let itemKind = okind coitem itemKindId
             c = CActor aid store
         unless (IK.isHumanTrinket itemKind) $ do  -- a hack
-          seed <- getsServer $ (EM.! iid) . sitemSeedD
-          execUpdAtomic $ UpdDiscover c iid itemKindId seed
+          discoAspect <- getsState sdiscoAspect
+          execUpdAtomic $ UpdDiscover c iid itemKindId $ discoAspect EM.! iid
       f aid = do
         b <- getsState $ getActorBody aid
         let ourSide = maybe True (== bfid b) mfid
@@ -354,23 +354,22 @@ addActorFromGroup actorGroup bfid pos lid time = do
   -- We bootstrap the actor by first creating the trunk of the actor's body
   -- that contains the constant properties.
   let trunkFreq = [(actorGroup, 1)]
-  m4 <- rollItem 0 lid trunkFreq
-  case m4 of
+  m3 <- rollItem 0 lid trunkFreq
+  case m3 of
     Nothing -> return Nothing
-    Just (itemKnown, itemFullKit, seed, _) ->
-      Just <$> registerActor False itemKnown itemFullKit seed bfid pos lid time
+    Just (itemKnown, itemFullKit, _) ->
+      Just <$> registerActor False itemKnown itemFullKit bfid pos lid time
 
 registerActor :: MonadServerAtomic m
-              => Bool -> ItemKnown -> ItemFullKit -> IA.ItemSeed
+              => Bool -> ItemKnown -> ItemFullKit
               -> FactionId -> Point -> LevelId -> Time
               -> m ActorId
-registerActor summoned (kindIx, ar, _) (itemFullRaw, kit)
-              seed bfid pos lid time = do
+registerActor summoned (kindIx, ar, _) (itemFullRaw, kit) bfid pos lid time = do
   let container = CTrunk bfid lid pos
       jfid = Just bfid
       itemKnown = (kindIx, ar, jfid)
       itemFull = itemFullRaw {itemBase = (itemBase itemFullRaw) {jfid}}
-  trunkId <- registerItem (itemFull, kit) itemKnown seed container False
+  trunkId <- registerItem (itemFull, kit) itemKnown container False
   addNonProjectile summoned trunkId (itemFull, kit) bfid pos lid time
 
 addProjectile :: MonadServerAtomic m
@@ -465,8 +464,8 @@ discoverIfMinorEffects c iid itemKindId = do
   let itemKind = okind coitem itemKindId
   if IK.onlyMinorEffects itemKind
   then do
-    seed <- getsServer $ (EM.! iid) . sitemSeedD
-    execUpdAtomic $ UpdDiscover c iid itemKindId seed
+    discoAspect <- getsState sdiscoAspect
+    execUpdAtomic $ UpdDiscover c iid itemKindId $ discoAspect EM.! iid
   else return ()  -- discover by use when item's effects get activated later on
 
 pickWeaponServer :: MonadServer m => ActorId -> m (Maybe (ItemId, CStore))

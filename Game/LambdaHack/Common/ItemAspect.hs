@@ -1,9 +1,9 @@
 {-# LANGUAGE DeriveGeneric, GeneralizedNewtypeDeriving #-}
 -- | The type of item aspects and its operations.
 module Game.LambdaHack.Common.ItemAspect
-  ( Aspect(..), AspectRecord(..), KindMean(..), ItemSeed, EqpSlot(..)
+  ( Aspect(..), AspectRecord(..), KindMean(..), EqpSlot(..)
   , emptyAspectRecord, addMeanAspect, castAspect, aspectsRandom
-  , sumAspectRecord, aspectRecordToList, seedToAspect, prEqpSlot
+  , sumAspectRecord, aspectRecordToList, rollAspectRecord, prEqpSlot
 #ifdef EXPOSE_INTERNAL
     -- * Internal operations
   , ceilingMeanDice
@@ -65,19 +65,13 @@ data AspectRecord = AspectRecord
 
 -- | Partial information about an item, deduced from its item kind.
 -- These are assigned to each 'ItemKind'. The @kmConst@ flag says whether
--- the item's aspects are constant rather than random or dependent
+-- the item's aspect record is constant rather than random or dependent
 -- on item creation dungeon level.
 data KindMean = KindMean
   { kmConst :: Bool  -- ^ whether the item doesn't need second identification
-  , kmMean  :: AspectRecord  -- ^ mean value of item's possible aspects
+  , kmMean  :: AspectRecord  -- ^ mean value of item's possible aspect records
   }
   deriving (Show, Eq, Ord, Generic)
-
--- | A seed for rolling aspects of an item
--- Clients have partial knowledge of how item ids map to the seeds.
--- They gain knowledge by identifying items.
-newtype ItemSeed = ItemSeed Int
-  deriving (Show, Eq, Ord, Enum, Hashable, Binary)
 
 -- | AI and UI hints about the role of the item.
 data EqpSlot =
@@ -272,11 +266,10 @@ aspectRecordToList AspectRecord{..} =
   ++ [AddAggression $ Dice.intToDice aAggression | aAggression /= 0]
   ++ [AddAbility ab $ Dice.intToDice n | (ab, n) <- EM.assocs aSkills, n /= 0]
 
-seedToAspect :: ItemSeed -> [Aspect] -> Dice.AbsDepth -> Dice.AbsDepth
-             -> AspectRecord
-seedToAspect (ItemSeed itemSeed) ass ldepth totalDepth =
-  let rollM = foldlM' (castAspect ldepth totalDepth) emptyAspectRecord ass
-  in St.evalState rollM (R.mkStdGen itemSeed)
+rollAspectRecord :: [Aspect] -> Dice.AbsDepth -> Dice.AbsDepth
+                 -> Rnd AspectRecord
+rollAspectRecord ass ldepth totalDepth =
+  foldlM' (castAspect ldepth totalDepth) emptyAspectRecord ass
 
 prEqpSlot :: EqpSlot -> AspectRecord -> Int
 prEqpSlot eqpSlot ar@AspectRecord{..} =
